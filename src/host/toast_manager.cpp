@@ -1,6 +1,7 @@
 #include "toast_manager.h"
 #include "../shared/positioning.h"
 #include <algorithm>
+#include <cmath>
 
 namespace notiman {
 
@@ -164,12 +165,15 @@ void ToastManager::AnimateToPosition(ToastWindow* toast, ToastPosition target) {
     // If already at target, skip
     if (current.left == target.x && current.top == target.y) return;
 
-    // Use SetWindowPos with smooth movement
-    SetWindowPos(toast->GetHwnd(), nullptr,
+    const int dx = static_cast<int>(target.x) - current.left;
+    const int dy = static_cast<int>(target.y) - current.top;
+    const int distance = static_cast<int>(std::sqrt(static_cast<double>(dx * dx + dy * dy)));
+    const int duration_ms = std::clamp(120 + distance / 3, 120, 220);
+
+    toast->StartMoveAnimation(
         static_cast<int>(target.x),
         static_cast<int>(target.y),
-        0, 0,
-        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        duration_ms);
 }
 
 } // namespace notiman

@@ -209,6 +209,7 @@ namespace notiman
     {
         StopAutoDismissTimer();
         StopAnimation();
+        StopMoveAnimation();
         anim_complete_callback_ = nullptr;
         dismiss_callback_ = nullptr;
         if (hwnd_)
@@ -305,6 +306,11 @@ namespace notiman
             if (wParam == anim_timer_id_)
             {
                 UpdateAnimation();
+                return 0;
+            }
+            if (wParam == move_timer_id_)
+            {
+                UpdateMoveAnimation();
                 return 0;
             }
             break;
@@ -567,6 +573,28 @@ namespace notiman
         anim_timer_id_ = SetTimer(hwnd_, 1, 16, nullptr);
     }
 
+    void ToastWindow::StartMoveAnimation(int target_x, int target_y, int duration_ms)
+    {
+        RECT current = {};
+        GetWindowRect(hwnd_, &current);
+
+        move_start_pos_.x = current.left;
+        move_start_pos_.y = current.top;
+        move_target_pos_.x = target_x;
+        move_target_pos_.y = target_y;
+
+        if (move_start_pos_.x == move_target_pos_.x && move_start_pos_.y == move_target_pos_.y)
+        {
+            return;
+        }
+
+        move_duration_ms_ = (duration_ms > 0) ? duration_ms : 170;
+        move_progress_ = 0.0;
+
+        StopMoveAnimation();
+        move_timer_id_ = SetTimer(hwnd_, 3, 16, nullptr);
+    }
+
     void ToastWindow::UpdateAnimation()
     {
         constexpr double ANIM_DURATION_MS = 125.0;
@@ -638,6 +666,43 @@ namespace notiman
         }
         anim_state_ = AnimState::None;
         anim_progress_ = 0.0;
+    }
+
+    void ToastWindow::UpdateMoveAnimation()
+    {
+        constexpr double FRAME_MS = 16.0;
+
+        move_progress_ += FRAME_MS / static_cast<double>(move_duration_ms_);
+        if (move_progress_ > 1.0)
+        {
+            move_progress_ = 1.0;
+        }
+
+        const double eased = EaseOutCubic(move_progress_);
+        const int x = static_cast<int>(std::lround(
+            move_start_pos_.x + (move_target_pos_.x - move_start_pos_.x) * eased));
+        const int y = static_cast<int>(std::lround(
+            move_start_pos_.y + (move_target_pos_.y - move_start_pos_.y) * eased));
+
+        SetWindowPos(hwnd_, nullptr, x, y, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+        if (move_progress_ >= 1.0)
+        {
+            SetWindowPos(hwnd_, nullptr, move_target_pos_.x, move_target_pos_.y, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            StopMoveAnimation();
+        }
+    }
+
+    void ToastWindow::StopMoveAnimation()
+    {
+        if (move_timer_id_)
+        {
+            KillTimer(hwnd_, move_timer_id_);
+            move_timer_id_ = 0;
+        }
+        move_progress_ = 0.0;
     }
 
     double ToastWindow::EaseOutCubic(double t)

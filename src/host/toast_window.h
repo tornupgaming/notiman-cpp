@@ -32,6 +32,7 @@ public:
     void StartAutoDismissTimer(int duration_ms);
     void StopAutoDismissTimer();
     void StartAnimation(AnimState state, std::function<void(ToastWindow*)> on_complete);
+    void StartMoveAnimation(int target_x, int target_y, int duration_ms = 170);
 
 private:
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -73,9 +74,16 @@ private:
     // Animation methods
     void UpdateAnimation();
     void StopAnimation();
+    void UpdateMoveAnimation();
+    void StopMoveAnimation();
     double EaseOutCubic(double t);
 
     UINT_PTR dismiss_timer_id_ = 0;
+    UINT_PTR move_timer_id_ = 0;
+    int move_duration_ms_ = 170;
+    double move_progress_ = 0.0;
+    POINT move_start_pos_ = {0, 0};
+    POINT move_target_pos_ = {0, 0};
     bool auto_dismiss_enabled_ = true;
     bool mouse_tracked_ = false;
 };
