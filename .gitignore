@@ -6,6 +6,7 @@ dist/
 *.obj
 *.pdb
 *.ilk
+.omc/
 
 # CMake generated files
 CMakeCache.txt
