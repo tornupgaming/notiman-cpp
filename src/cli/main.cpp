@@ -168,7 +168,6 @@ int main(int argc, char** argv) {
     std::string icon_str = "info";
     std::vector<std::string> ignored_tools = {"Glob", "Grep", "Read", "ReadFile"};
     int duration = 0;
-    int port = 9123;
 
     app.add_option("-t,--title", title, "Notification title");
     app.add_option("-b,--body", body, "Notification body");
@@ -179,8 +178,6 @@ int main(int argc, char** argv) {
     app.add_option("--ignore-tool", ignored_tools, "Tool name to ignore for hook-based notifications (repeatable or comma-separated)")
         ->delimiter(',')
         ->default_str("Glob,Grep,Read,ReadFile");
-    app.add_option("-p,--port", port, "Host port")
-        ->default_str("9123");
 
     CLI11_PARSE(app, argc, argv);
     append_log("CLI invoked.");

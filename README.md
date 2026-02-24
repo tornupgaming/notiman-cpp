@@ -1,13 +1,17 @@
-# Notiman C++ Port
+# Notiman C++ Implementation
 
 High-performance C++ implementation of Notiman using Win32 APIs and Direct2D.
 
-## Benefits
-
-- **3.2x smaller memory footprint** (66MB vs 213MB for C# version)
-- **Faster startup and execution**
-- **No runtime dependencies** (static linking)
+- **No runtime dependencies**
 - **Native Windows integration**
+
+## Performance
+
+- Host
+  - ~400kb size
+  - ~5mb memory usage
+- CLI
+  - ~850kb size
 
 ## Build
 
@@ -20,32 +24,83 @@ cmake --build build --config Release
 ```
 
 Or use MSBuild directly:
+
 ```bash
 msbuild build/Notiman.sln //p:Configuration=Release //v:minimal
 ```
 
+Or use the provided batch script:
+
+```bat
+build.bat
+```
+
+`build.bat` calls `MSBuild.exe` using a Visual Studio install path. If your edition differs, update this path in `build.bat`:
+
+- Community: `%ProgramFiles%\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`
+- Professional: `%ProgramFiles%\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe`
+- Enterprise: `%ProgramFiles%\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe`
+
 ## Executables
 
 After building, find executables in:
+
 - CLI: `build/src/cli/Release/notiman.exe` (842KB)
 - Host: `build/src/host/Release/notiman-host.exe` (790KB)
 
 ## Usage
 
 Start the host:
+
 ```bash
 notiman-host.exe
 ```
 
 Send notifications:
+
 ```bash
 notiman.exe -t "Title" -b "Body text" -i success
 notiman.exe -t "Code Example" -c "int main() { return 0; }"
 ```
 
-## Cursor Hooks Integration
+## Configuration File
 
-`notiman.exe` can be used directly from Cursor Agent hooks by piping hook JSON into stdin.
+Notiman reads config from:
+
+1. `%APPDATA%\notiman\config.ini` (preferred, user-specific)
+2. `config/default.ini` next to the executable (fallback)
+
+Right clicking Notiman in the system tray will give you a direct link to the config file.
+
+Example config:
+
+```ini
+[notiman]
+corner=TopLeft
+monitor=0
+max_visible=5
+duration=8000
+width=400
+accent_color=#7C3AED
+opacity=0.45
+```
+
+Supported keys:
+
+- `corner`: toast anchor (`TopLeft`, `TopRight`, `BottomLeft`, `BottomRight`)
+- `monitor`: zero-based monitor index
+- `max_visible`: max simultaneous toasts
+- `duration`: toast duration in milliseconds
+- `width`: toast width in pixels
+- `accent_color`: hex color (`#RRGGBB`)
+- `opacity`: background opacity (`0.0` to `1.0`)
+
+## Agent Support
+
+`notiman.exe` can be used directly from various Agent hooks by piping hook JSON into stdin.
+Supported hook event names include both Claude-style (`PostToolUse`) and Cursor-style (`postToolUse`) variants.
+
+### Cursor Hooks Integration
 
 Example project hook config:
 
@@ -65,20 +120,22 @@ Example project hook config:
 }
 ```
 
-Supported hook event names include both Claude-style (`PostToolUse`) and Cursor-style (`postToolUse`) variants.
+## Claude Code Hooks Integration
 
-## Architecture
+Example Claude Code hook config:
 
-- **CLI** (`src/cli`) - Command-line interface, sends notifications via WM_COPYDATA
-- **Host** (`src/host`) - System tray app, renders toasts with Direct2D
-- **Shared** (`src/shared`) - Common types, config, hook parser
-- **Third-party** (`third_party`) - Header-only dependencies (nlohmann/json, toml11, CLI11)
-
-## Tech Stack
-
-- C++20
-- Win32 API
-- Direct2D for rendering
-- DirectWrite for text
-- DWM for acrylic effects
-- Static CRT linking (/MT)
+```json
+{
+  "version": 1,
+  "hooks": {
+    "PostToolUse": [{ "command": "notiman.exe --ignore-tool Glob,Grep,Read,ReadFile" }],
+    "PostToolUseFailure": [{ "command": "notiman.exe" }],
+    "AfterShellExecution": [{ "command": "notiman.exe" }],
+    "AfterMCPExecution": [{ "command": "notiman.exe --ignore-tool Glob,Grep,Read,ReadFile" }],
+    "AfterFileEdit": [{ "command": "notiman.exe" }],
+    "Stop": [{ "command": "notiman.exe" }],
+    "SubagentStop": [{ "command": "notiman.exe" }],
+    "SessionStart": [{ "command": "notiman.exe" }]
+  }
+}
+```

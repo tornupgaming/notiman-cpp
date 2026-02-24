@@ -30,7 +30,7 @@ std::filesystem::path ensure_config_path()
     {
         std::filesystem::path dir(appdata_buf);
         dir /= "notiman";
-        std::filesystem::path config_path = dir / "config.toml";
+        std::filesystem::path config_path = dir / "config.ini";
 
         if (std::filesystem::exists(config_path))
         {
@@ -42,14 +42,14 @@ std::filesystem::path ensure_config_path()
         std::ofstream out(config_path);
         if (out)
         {
-            out << "port = 9123\n"
-                << "corner = \"BottomRight\"\n"
-                << "monitor = 0\n"
-                << "max_visible = 5\n"
-                << "duration = 4000\n"
-                << "width = 400\n"
-                << "accent_color = \"#7C3AED\"\n"
-                << "opacity = 0.85\n";
+            out << "[notiman]\n"
+                << "corner=BottomRight\n"
+                << "monitor=0\n"
+                << "max_visible=5\n"
+                << "duration=4000\n"
+                << "width=400\n"
+                << "accent_color=#7C3AED\n"
+                << "opacity=0.85\n";
         }
 
         return config_path;
@@ -236,7 +236,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
     g_nid.uCallbackMessage = WM_APP + 1;
     g_nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
 
-    // Set tooltip with port number
+    // Set tray tooltip text
     swprintf_s(g_nid.szTip, L"Notiman");
 
     Shell_NotifyIconW(NIM_ADD, &g_nid);

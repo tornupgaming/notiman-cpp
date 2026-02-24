@@ -1,9 +1,0 @@
-# config/default.toml
-port = 9123
-corner = "TopLeft"
-monitor = 0
-max_visible = 5
-duration = 8000
-width = 400
-accent_color = "#7C3AED"
-opacity = 0.45

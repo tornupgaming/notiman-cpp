@@ -5,8 +5,6 @@ add_executable(notiman-host WIN32
     toast_manager.h
     toast_manager.cpp
     render_utils.cpp
-    acrylic.h
-    acrylic.cpp
 )
 
 target_link_libraries(notiman-host PRIVATE notiman_shared third_party)

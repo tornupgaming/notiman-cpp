@@ -1,5 +1,5 @@
 @echo off
-REM Build script for Notiman C++ port
+REM Build script for Notiman C++ implementation
 
 echo Cleaning old build...
 if exist build rmdir /s /q build
@@ -13,7 +13,7 @@ if errorlevel 1 (
 )
 
 echo Building Release configuration...
-"%ProgramFiles%\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" build\Notiman.slnx /p:Configuration=Release /v:minimal
+"%ProgramFiles%\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe" build\Notiman.slnx /p:Configuration=Release /v:minimal
 if errorlevel 1 (
     echo Build failed!
     exit /b 1
