@@ -1,5 +1,12 @@
 #include <CLI11/CLI11.hpp>
+#include <cstdlib>
+#include <chrono>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <nlohmann/json.hpp>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <Windows.h>
@@ -40,6 +47,58 @@ static std::string read_piped_stdin() {
     return stdin_content;
 }
 
+static std::string get_log_file_path() {
+    char* env_path = nullptr;
+    size_t env_len = 0;
+    if (_dupenv_s(&env_path, &env_len, "NOTIMAN_LOG_FILE") == 0 &&
+        env_path != nullptr &&
+        env_path[0] != '\0') {
+        std::string value(env_path);
+        free(env_path);
+        return value;
+    }
+
+    if (env_path != nullptr) {
+        free(env_path);
+    }
+
+    // Default to current working directory. For user-level Cursor hooks this is
+    // typically C:\Users\<user>\.cursor\logs.txt.
+    return "logs.txt";
+}
+
+static std::string build_timestamp() {
+    const auto now = std::chrono::system_clock::now();
+    const auto now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm local_tm {};
+    localtime_s(&local_tm, &now_time);
+
+    std::ostringstream oss;
+    oss << std::put_time(&local_tm, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+}
+
+static void append_log(const std::string& message) {
+    std::ofstream log_file(get_log_file_path(), std::ios::app);
+    if (!log_file.is_open()) {
+        return;
+    }
+
+    log_file << "[" << build_timestamp() << "] " << message << "\n";
+}
+
+static std::string extract_hook_event_name(const std::string& stdin_content) {
+    try {
+        auto root = nlohmann::json::parse(stdin_content);
+        if (root.contains("hook_event_name") && root["hook_event_name"].is_string()) {
+            return root["hook_event_name"].get<std::string>();
+        }
+    } catch (const nlohmann::json::exception&) {
+    }
+
+    return "";
+}
+
 static notiman::NotificationPayload build_manual_payload(
     const std::string& title,
     const std::string& body,
@@ -70,6 +129,7 @@ static notiman::NotificationPayload build_manual_payload(
 static int send_payload_to_host(const notiman::NotificationPayload& payload) {
     HWND hostWindow = FindWindowW(L"NotimanHostClass", nullptr);
     if (!hostWindow) {
+        append_log("Host window not found (NotimanHostClass).");
         std::cerr << "Error: notiman host is not running\n";
         return 1;
     }
@@ -90,9 +150,11 @@ static int send_payload_to_host(const notiman::NotificationPayload& payload) {
     );
 
     if (result == 1) {
+        append_log("Notification payload accepted by host.");
         return 0;
     }
 
+    append_log("Host rejected notification payload.");
     std::cerr << "Error: host did not accept notification\n";
     return 1;
 }
@@ -104,7 +166,7 @@ int main(int argc, char** argv) {
     std::string body;
     std::string code;
     std::string icon_str = "info";
-    std::vector<std::string> ignored_tools = {"Glob", "Grep", "Read"};
+    std::vector<std::string> ignored_tools = {"Glob", "Grep", "Read", "ReadFile"};
     int duration = 0;
     int port = 9123;
 
@@ -116,23 +178,34 @@ int main(int argc, char** argv) {
     app.add_option("-d,--duration", duration, "Auto-dismiss duration in ms");
     app.add_option("--ignore-tool", ignored_tools, "Tool name to ignore for hook-based notifications (repeatable or comma-separated)")
         ->delimiter(',')
-        ->default_str("Glob,Grep,Read");
+        ->default_str("Glob,Grep,Read,ReadFile");
     app.add_option("-p,--port", port, "Host port")
         ->default_str("9123");
 
     CLI11_PARSE(app, argc, argv);
+    append_log("CLI invoked.");
 
     notiman::NotificationPayload payload;
     bool payload_from_hook = false;
     std::string stdin_content = read_piped_stdin();
+    append_log("stdin bytes=" + std::to_string(stdin_content.size()));
 
     if (!stdin_content.empty() && title.empty() && body.empty()) {
+        std::string hook_event_name = extract_hook_event_name(stdin_content);
+        if (!hook_event_name.empty()) {
+            append_log("Hook payload detected: hook_event_name=" + hook_event_name);
+        } else {
+            append_log("stdin present but missing/invalid hook_event_name.");
+        }
+
         auto hook_payload = notiman::HookParser::try_parse(stdin_content, ignored_tools);
         if (hook_payload.has_value()) {
             payload = std::move(hook_payload.value());
             payload_from_hook = true;
+            append_log("Hook payload mapped to notification.");
         } else {
             // In hook mode, ignore events that do not map to a notification.
+            append_log("Hook payload ignored (unmapped/filtered/invalid).");
             return 0;
         }
     }
@@ -143,12 +216,15 @@ int main(int argc, char** argv) {
         }
 
         if (title.empty()) {
+            append_log("Manual mode failed: --title missing.");
             std::cerr << "Error: --title is required\n";
             return 1;
         }
 
+        append_log("Manual payload built from CLI arguments.");
         payload = build_manual_payload(title, body, code, icon_str, duration);
     }
 
+    append_log("Sending payload to host.");
     return send_payload_to_host(payload);
 }

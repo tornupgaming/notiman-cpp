@@ -43,6 +43,30 @@ notiman.exe -t "Title" -b "Body text" -i success
 notiman.exe -t "Code Example" -c "int main() { return 0; }"
 ```
 
+## Cursor Hooks Integration
+
+`notiman.exe` can be used directly from Cursor Agent hooks by piping hook JSON into stdin.
+
+Example project hook config:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [{ "command": "notiman.exe --ignore-tool Glob,Grep,Read,ReadFile" }],
+    "postToolUseFailure": [{ "command": "notiman.exe" }],
+    "afterShellExecution": [{ "command": "notiman.exe" }],
+    "afterMCPExecution": [{ "command": "notiman.exe --ignore-tool Glob,Grep,Read,ReadFile" }],
+    "afterFileEdit": [{ "command": "notiman.exe" }],
+    "stop": [{ "command": "notiman.exe" }],
+    "subagentStop": [{ "command": "notiman.exe" }],
+    "sessionStart": [{ "command": "notiman.exe" }]
+  }
+}
+```
+
+Supported hook event names include both Claude-style (`PostToolUse`) and Cursor-style (`postToolUse`) variants.
+
 ## Architecture
 
 - **CLI** (`src/cli`) - Command-line interface, sends notifications via WM_COPYDATA
