@@ -13,7 +13,7 @@ if errorlevel 1 (
 )
 
 echo Building Release configuration...
-"%ProgramFiles%\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe" build\Notiman.slnx /p:Configuration=Release /v:minimal
+"%ProgramFiles%\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" build\Notiman.slnx /p:Configuration=Release /v:minimal
 if errorlevel 1 (
     echo Build failed!
     exit /b 1
@@ -25,6 +25,8 @@ echo.
 echo Executables:
 echo   CLI:  build\src\cli\Release\notiman.exe
 echo   Host: build\src\host\Release\notiman-host.exe
+echo   Proxy: build\src\proxy\Release\notiman-proxy.exe
 
 echo f | xcopy /s /f /y build\src\cli\Release\notiman.exe dist\notiman.exe
 echo f | xcopy /s /f /y build\src\host\Release\notiman-host.exe dist\notiman-host.exe
+echo f | xcopy /s /f /y build\src\proxy\Release\notiman-proxy.exe dist\notiman-proxy.exe

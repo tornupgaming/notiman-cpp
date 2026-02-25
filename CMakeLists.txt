@@ -34,3 +34,4 @@ add_custom_target(copy_config ALL
 add_subdirectory(src/shared)
 add_subdirectory(src/host)
 add_subdirectory(src/cli)
+add_subdirectory(src/proxy)
