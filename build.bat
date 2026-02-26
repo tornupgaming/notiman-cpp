@@ -13,7 +13,7 @@ if errorlevel 1 (
 )
 
 echo Building Release configuration...
-"%ProgramFiles%\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" build\Notiman.slnx /p:Configuration=Release /v:minimal
+"%ProgramFiles%\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe" build\Notiman.slnx /p:Configuration=Release /v:minimal
 if errorlevel 1 (
     echo Build failed!
     exit /b 1

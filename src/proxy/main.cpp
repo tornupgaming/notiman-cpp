@@ -96,12 +96,18 @@ int send_payload_to_host(const notiman::NotificationPayload& payload) {
     return (result == 1) ? 0 : 1;
 }
 
-void notify_host(notiman::NotificationIcon icon, const std::wstring& title, const std::wstring& body) {
+void notify_host(notiman::NotificationIcon icon,
+                 const std::wstring& title,
+                 const std::wstring& body = L"",
+                 const std::wstring& code = L"",
+                 const std::wstring& project = L"") {
     notiman::NotificationPayload payload;
     payload.icon = icon;
     payload.title = title;
     payload.body = body;
-    payload.project = L"notiman-proxy";
+    payload.code = code;
+    payload.project = project;
+    payload.duration = 10000;
     send_payload_to_host(payload);
 }
 
@@ -226,10 +232,8 @@ std::string lowercase(const std::string& input) {
     return result;
 }
 
-std::wstring build_request_summary(const httplib::Request& req, int status, long long elapsed_ms) {
-    std::string line = req.method + " " + req.path + " -> " + std::to_string(status) +
-                       " (" + std::to_string(elapsed_ms) + "ms)";
-    return utf8_to_utf16(line);
+std::wstring build_request_title(const httplib::Request& req, long long elapsed_ms) {
+    return utf8_to_utf16(req.method + " " + std::to_string(elapsed_ms) + "ms");
 }
 
 void proxy_request(const httplib::Request& req, httplib::Response& res) {
@@ -241,8 +245,10 @@ void proxy_request(const httplib::Request& req, httplib::Response& res) {
         res.set_content("No route configured for path", "text/plain");
         notify_host(
             notiman::NotificationIcon::Error,
-            L"notiman-proxy route error",
-            utf8_to_utf16("No route configured for " + req.path));
+            L"Proxy error",
+            utf8_to_utf16("No route configured for " + req.path),
+            L"route-match",
+            L"");
         return;
     }
 
@@ -252,8 +258,10 @@ void proxy_request(const httplib::Request& req, httplib::Response& res) {
         res.set_content("Invalid route target URL", "text/plain");
         notify_host(
             notiman::NotificationIcon::Error,
-            L"notiman-proxy config error",
-            utf8_to_utf16("Invalid target URL for route " + route->path_prefix));
+            L"Proxy error",
+            utf8_to_utf16("Invalid target URL for route " + route->path_prefix),
+            L"target-url",
+            utf8_to_utf16(route->path_prefix));
         return;
     }
 
@@ -293,8 +301,10 @@ void proxy_request(const httplib::Request& req, httplib::Response& res) {
         res.set_content("Failed to reach upstream target", "text/plain");
         notify_host(
             notiman::NotificationIcon::Error,
-            L"notiman-proxy upstream error",
-            utf8_to_utf16("Failed to connect to " + route->target_base_url));
+            L"Proxy error",
+            utf8_to_utf16("Failed to connect to " + route->target_base_url),
+            L"upstream",
+            utf8_to_utf16(route->path_prefix));
         return;
     }
 
@@ -314,7 +324,16 @@ void proxy_request(const httplib::Request& req, httplib::Response& res) {
         icon = notiman::NotificationIcon::Warning;
     }
 
-    notify_host(icon, L"notiman-proxy request", build_request_summary(req, result->status, elapsed_ms));
+    const std::string remainder = req.path.size() > route->path_prefix.size()
+        ? req.path.substr(route->path_prefix.size())
+        : "/";
+
+    notify_host(
+        icon,
+        build_request_title(req, elapsed_ms),
+        L"",
+        utf8_to_utf16(remainder),
+        utf8_to_utf16(route->path_prefix));
 }
 
 bool start_proxy_server() {
@@ -329,7 +348,7 @@ bool start_proxy_server() {
         } catch (...) {
             res.status = 500;
             res.set_content("Internal proxy error", "text/plain");
-            notify_host(notiman::NotificationIcon::Error, L"notiman-proxy internal error", L"Unhandled exception.");
+            notify_host(notiman::NotificationIcon::Error, L"Proxy error", L"Unhandled exception.", L"internal");
         }
     };
 
