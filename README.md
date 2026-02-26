@@ -50,8 +50,9 @@ build.bat
 
 After building, find executables in:
 
-- CLI: `build/src/cli/Release/notiman.exe` (842KB)
-- Host: `build/src/host/Release/notiman-host.exe` (790KB)
+- CLI: `build/src/cli/Release/notiman.exe`
+- Host: `build/src/host/Release/notiman-host.exe`
+- Proxy: `build/src/host/Release/notiman-proxy.exe`
 
 ## Usage
 
