@@ -40,6 +40,14 @@ std::string trim(const std::string& input) {
     return input.substr(start, end - start);
 }
 
+std::string lowercase(const std::string& input) {
+    std::string result = input;
+    for (char& c : result) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return result;
+}
+
 std::vector<ProxyRoute> load_routes(const std::wstring& ini_path) {
     std::vector<ProxyRoute> routes;
 
@@ -61,7 +69,7 @@ std::vector<ProxyRoute> load_routes(const std::wstring& ini_path) {
         if (equals_pos != std::wstring::npos) {
             const std::wstring key_w = line.substr(0, equals_pos);
             const std::wstring value_w = line.substr(equals_pos + 1);
-            const std::string key = trim(narrow_utf8(key_w.c_str()));
+            const std::string key = lowercase(trim(narrow_utf8(key_w.c_str())));
             const std::string value = trim(narrow_utf8(value_w.c_str()));
 
             if (!key.empty() && !value.empty()) {
@@ -70,10 +78,6 @@ std::vector<ProxyRoute> load_routes(const std::wstring& ini_path) {
         }
         cursor += line.size() + 1;
     }
-
-    std::sort(routes.begin(), routes.end(), [](const ProxyRoute& a, const ProxyRoute& b) {
-        return a.path_prefix.size() > b.path_prefix.size();
-    });
 
     return routes;
 }

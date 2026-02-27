@@ -13,6 +13,7 @@
 #include <io.h>      // _isatty
 #include "../shared/payload.h"
 #include "../shared/icon.h"
+#include "../shared/host_ipc.h"
 #include "../shared/hook_parser.h"
 
 // Convert UTF-8 string to UTF-16 wstring
@@ -126,39 +127,6 @@ static notiman::NotificationPayload build_manual_payload(
     return payload;
 }
 
-static int send_payload_to_host(const notiman::NotificationPayload& payload) {
-    HWND hostWindow = FindWindowW(L"NotimanHostClass", nullptr);
-    if (!hostWindow) {
-        append_log("Host window not found (NotimanHostClass).");
-        std::cerr << "Error: notiman host is not running\n";
-        return 1;
-    }
-
-    auto json_obj = payload.to_json();
-    std::string json_str = json_obj.dump();
-
-    COPYDATASTRUCT cds;
-    cds.dwData = 1;
-    cds.cbData = static_cast<DWORD>(json_str.size() + 1);
-    cds.lpData = const_cast<char*>(json_str.c_str());
-
-    LRESULT result = SendMessageW(
-        hostWindow,
-        WM_COPYDATA,
-        0,
-        reinterpret_cast<LPARAM>(&cds)
-    );
-
-    if (result == 1) {
-        append_log("Notification payload accepted by host.");
-        return 0;
-    }
-
-    append_log("Host rejected notification payload.");
-    std::cerr << "Error: host did not accept notification\n";
-    return 1;
-}
-
 int main(int argc, char** argv) {
     CLI::App app{"Notiman CLI - send notifications"};
 
@@ -223,5 +191,17 @@ int main(int argc, char** argv) {
     }
 
     append_log("Sending payload to host.");
-    return send_payload_to_host(payload);
+    std::string host_error;
+    if (notiman::send_payload_to_host(payload, &host_error)) {
+        append_log("Notification payload accepted by host.");
+        return 0;
+    }
+
+    append_log(host_error.empty() ? "Failed to send payload to host." : host_error);
+    if (host_error == "Host window not found.") {
+        std::cerr << "Error: notiman host is not running\n";
+    } else {
+        std::cerr << "Error: host did not accept notification\n";
+    }
+    return 1;
 }

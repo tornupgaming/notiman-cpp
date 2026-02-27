@@ -7,8 +7,12 @@
 #include <shlobj.h>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <thread>
 #include "toast_manager.h"
+#include "../shared/config_watcher.h"
 #include "../shared/payload.h"
+#include "../shared/tray_icon.h"
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
@@ -22,6 +26,11 @@ std::unique_ptr<notiman::ToastManager> g_toastManager;
 NOTIFYICONDATAW g_nid = {};
 constexpr UINT IDM_OPEN_SETTINGS = 1001;
 constexpr UINT IDM_EXIT = 1002;
+constexpr UINT WM_CONFIG_CHANGED = WM_APP + 2;
+
+std::filesystem::path g_config_path;
+std::thread g_watcher_thread;
+HANDLE g_watcher_dir_handle = INVALID_HANDLE_VALUE;
 
 std::filesystem::path ensure_config_path()
 {
@@ -104,19 +113,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_APP + 1: // Tray icon message
         if (lParam == WM_RBUTTONUP)
         {
-            HMENU hMenu = CreatePopupMenu();
-            if (hMenu)
-            {
-                AppendMenuW(hMenu, MF_STRING, IDM_OPEN_SETTINGS, L"Open Settings");
-                AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Exit");
-
-                POINT pt;
-                GetCursorPos(&pt);
-                SetForegroundWindow(hwnd);
-                TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
-                PostMessage(hwnd, WM_NULL, 0, 0);
-                DestroyMenu(hMenu);
-            }
+            notiman::show_open_settings_exit_menu(hwnd, IDM_OPEN_SETTINGS, IDM_EXIT);
         }
         return 0;
 
@@ -136,6 +133,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             break;
         }
         return 0;
+
+    case WM_CONFIG_CHANGED:
+    {
+        auto new_config = notiman::NotimanConfig::load_from_file(g_config_path);
+        g_toastManager = std::make_unique<notiman::ToastManager>(
+            new_config, g_d2dFactory.Get(), g_dwFactory.Get());
+        notiman::NotificationPayload payload;
+        payload.title = L"Config reloaded";
+        payload.icon = notiman::NotificationIcon::Info;
+        g_toastManager->Show(std::move(payload));
+        return 0;
+    }
 
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -219,8 +228,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
     }
 
     // Load config
-    auto config = notiman::NotimanConfig::load_from_file(
-        notiman::NotimanConfig::default_config_path());
+    g_config_path = ensure_config_path();
+    auto config = notiman::NotimanConfig::load_from_file(g_config_path);
+
+    // Start config file watcher
+    g_watcher_dir_handle = CreateFileW(
+        g_config_path.parent_path().wstring().c_str(),
+        FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (g_watcher_dir_handle != INVALID_HANDLE_VALUE)
+    {
+        g_watcher_thread = std::thread(
+            notiman::run_config_watcher,
+            g_watcher_dir_handle,
+            hwnd,
+            WM_CONFIG_CHANGED,
+            g_config_path.filename().wstring());
+    }
 
     // Create toast manager
     g_toastManager = std::make_unique<notiman::ToastManager>(
@@ -229,17 +254,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
         g_dwFactory.Get());
 
     // Create tray icon
-    g_nid.cbSize = sizeof(NOTIFYICONDATAW);
-    g_nid.hWnd = hwnd;
-    g_nid.uID = 1;
-    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    g_nid.uCallbackMessage = WM_APP + 1;
-    g_nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-
-    // Set tray tooltip text
-    swprintf_s(g_nid.szTip, L"Notiman");
-
-    Shell_NotifyIconW(NIM_ADD, &g_nid);
+    notiman::init_tray_icon(g_nid, hwnd, 1, WM_APP + 1, L"Notiman");
+    notiman::add_tray_icon(g_nid);
 
     // Test notification (temporary)
     notiman::NotificationPayload test_payload;
@@ -256,8 +272,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
         DispatchMessage(&msg);
     }
 
+    // Stop config watcher
+    if (g_watcher_dir_handle != INVALID_HANDLE_VALUE)
+    {
+        if (g_watcher_thread.joinable())
+        {
+            CancelSynchronousIo(reinterpret_cast<HANDLE>(g_watcher_thread.native_handle()));
+        }
+        CloseHandle(g_watcher_dir_handle);
+        g_watcher_dir_handle = INVALID_HANDLE_VALUE;
+    }
+    if (g_watcher_thread.joinable())
+    {
+        g_watcher_thread.join();
+    }
+
     // Remove tray icon
-    Shell_NotifyIconW(NIM_DELETE, &g_nid);
+    notiman::remove_tray_icon(g_nid);
 
     // Cleanup COM
     g_toastManager.reset();

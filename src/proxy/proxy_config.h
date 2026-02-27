@@ -7,7 +7,7 @@
 namespace notiman {
 
 struct ProxyRoute {
-    std::string path_prefix;
+    std::string subdomain;
     std::string target_base_url;
 };
 

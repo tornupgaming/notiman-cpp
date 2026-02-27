@@ -14,6 +14,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -22,6 +23,9 @@
 #include <httplib/httplib.h>
 
 #include "../shared/payload.h"
+#include "../shared/host_ipc.h"
+#include "../shared/config_watcher.h"
+#include "../shared/tray_icon.h"
 #include "proxy_config.h"
 
 #pragma comment(lib, "shell32.lib")
@@ -31,6 +35,7 @@ namespace {
 constexpr UINT IDM_OPEN_SETTINGS = 1001;
 constexpr UINT IDM_EXIT = 1002;
 constexpr UINT WM_TRAYICON = WM_APP + 1;
+constexpr UINT WM_CONFIG_CHANGED = WM_APP + 2;
 
 NOTIFYICONDATAW g_nid = {};
 HWND g_hwnd = nullptr;
@@ -38,6 +43,19 @@ std::unique_ptr<httplib::Server> g_server;
 std::thread g_server_thread;
 std::atomic_bool g_server_running = false;
 notiman::ProxyConfig g_proxy_config;
+std::shared_mutex g_config_mutex;
+
+std::filesystem::path g_config_path;
+std::thread g_watcher_thread;
+HANDLE g_watcher_dir_handle = INVALID_HANDLE_VALUE;
+
+std::string lowercase(const std::string& input) {
+    std::string result = input;
+    for (char& c : result) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return result;
+}
 
 std::wstring utf8_to_utf16(const std::string& utf8) {
     if (utf8.empty()) {
@@ -72,28 +90,12 @@ std::filesystem::path ensure_proxy_config_path() {
             out << "host=127.0.0.1\n";
             out << "port=8080\n\n";
             out << "[routes]\n";
-            out << "; /api = http://localhost:3000/api\n";
+            out << "; api = http://localhost:3000\n";
         }
         return config_path;
     }
 
     return notiman::ProxyConfig::default_config_path();
-}
-
-int send_payload_to_host(const notiman::NotificationPayload& payload) {
-    HWND host_window = FindWindowW(L"NotimanHostClass", nullptr);
-    if (!host_window) {
-        return 1;
-    }
-
-    const std::string json_str = payload.to_json().dump();
-    COPYDATASTRUCT cds = {};
-    cds.dwData = 1;
-    cds.cbData = static_cast<DWORD>(json_str.size() + 1);
-    cds.lpData = const_cast<char*>(json_str.c_str());
-
-    const LRESULT result = SendMessageW(host_window, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds));
-    return (result == 1) ? 0 : 1;
 }
 
 void notify_host(notiman::NotificationIcon icon,
@@ -108,7 +110,7 @@ void notify_host(notiman::NotificationIcon icon,
     payload.code = code;
     payload.project = project;
     payload.duration = 10000;
-    send_payload_to_host(payload);
+    notiman::send_payload_to_host(payload);
 }
 
 struct TargetEndpoint {
@@ -164,25 +166,37 @@ std::optional<TargetEndpoint> parse_target_endpoint(const std::string& url) {
     return endpoint;
 }
 
-bool path_matches_prefix(const std::string& path, const std::string& prefix) {
-    if (prefix.empty() || prefix[0] != '/') {
-        return false;
+// Extracts the subdomain from a Host header value like "api.localhost:8080" -> "api"
+std::string extract_subdomain(const std::string& host_header) {
+    // Strip port
+    const size_t colon = host_header.rfind(':');
+    const std::string host = (colon != std::string::npos) ? host_header.substr(0, colon) : host_header;
+
+    // Must end with ".localhost"
+    constexpr std::string_view suffix = ".localhost";
+    if (host.size() <= suffix.size()) {
+        return {};
     }
-    if (path.rfind(prefix, 0) != 0) {
-        return false;
+    if (lowercase(host).substr(host.size() - suffix.size()) != suffix) {
+        return {};
     }
-    if (path.size() == prefix.size()) {
-        return true;
+
+    // Only one subdomain level: "api.localhost" -> "api", "a.b.localhost" -> rejected
+    const std::string sub = host.substr(0, host.size() - suffix.size());
+    if (sub.empty() || sub.find('.') != std::string::npos) {
+        return {};
     }
-    if (!prefix.empty() && prefix.back() == '/') {
-        return true;
-    }
-    return path[prefix.size()] == '/';
+    return sub;
 }
 
-std::optional<notiman::ProxyRoute> find_route_for_path(const std::string& path) {
+std::optional<notiman::ProxyRoute> find_route_for_host(const std::string& host_header) {
+    const std::string sub = lowercase(extract_subdomain(host_header));
+    if (sub.empty()) {
+        return std::nullopt;
+    }
+    std::shared_lock lock(g_config_mutex);
     for (const auto& route : g_proxy_config.routes) {
-        if (path_matches_prefix(path, route.path_prefix)) {
+        if (route.subdomain == sub) {
             return route;
         }
     }
@@ -191,23 +205,15 @@ std::optional<notiman::ProxyRoute> find_route_for_path(const std::string& path) 
 
 std::string build_forward_path(const std::string& request_path,
                                const std::string& request_query,
-                               const std::string& route_prefix,
                                const std::string& target_base_path) {
-    std::string remainder;
-    if (request_path.size() > route_prefix.size()) {
-        remainder = request_path.substr(route_prefix.size());
-    }
+    std::string joined = target_base_path.empty() ? "/" : target_base_path;
 
-    std::string joined = target_base_path;
-    if (joined.empty()) {
-        joined = "/";
-    }
-    if (joined.back() == '/' && !remainder.empty() && remainder.front() == '/') {
+    if (joined.back() == '/' && !request_path.empty() && request_path.front() == '/') {
         joined.pop_back();
-    } else if (joined.back() != '/' && !remainder.empty() && remainder.front() != '/') {
+    } else if (joined.back() != '/' && !request_path.empty() && request_path.front() != '/') {
         joined.push_back('/');
     }
-    joined += remainder;
+    joined += request_path;
 
     if (!request_query.empty()) {
         joined += "?";
@@ -224,14 +230,6 @@ std::string extract_query_from_target(const std::string& target) {
     return target.substr(qpos + 1);
 }
 
-std::string lowercase(const std::string& input) {
-    std::string result = input;
-    for (char& c : result) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    return result;
-}
-
 std::wstring build_request_title(const httplib::Request& req, long long elapsed_ms) {
     return utf8_to_utf16(req.method + " " + std::to_string(elapsed_ms) + "ms");
 }
@@ -239,14 +237,15 @@ std::wstring build_request_title(const httplib::Request& req, long long elapsed_
 void proxy_request(const httplib::Request& req, httplib::Response& res) {
     const auto started_at = std::chrono::steady_clock::now();
 
-    auto route = find_route_for_path(req.path);
+    const std::string host_header = req.get_header_value("Host");
+    auto route = find_route_for_host(host_header);
     if (!route.has_value()) {
         res.status = 500;
-        res.set_content("No route configured for path", "text/plain");
+        res.set_content("No route configured for host", "text/plain");
         notify_host(
             notiman::NotificationIcon::Error,
             L"Proxy error",
-            utf8_to_utf16("No route configured for " + req.path),
+            utf8_to_utf16("No route configured for " + host_header),
             L"route-match",
             L"");
         return;
@@ -259,9 +258,9 @@ void proxy_request(const httplib::Request& req, httplib::Response& res) {
         notify_host(
             notiman::NotificationIcon::Error,
             L"Proxy error",
-            utf8_to_utf16("Invalid target URL for route " + route->path_prefix),
+            utf8_to_utf16("Invalid target URL for route " + route->subdomain),
             L"target-url",
-            utf8_to_utf16(route->path_prefix));
+            utf8_to_utf16(route->subdomain));
         return;
     }
 
@@ -286,7 +285,6 @@ void proxy_request(const httplib::Request& req, httplib::Response& res) {
     outgoing.path = build_forward_path(
         req.path,
         extract_query_from_target(req.target),
-        route->path_prefix,
         endpoint->base_path);
     outgoing.headers = std::move(headers);
     outgoing.body = req.body;
@@ -304,7 +302,7 @@ void proxy_request(const httplib::Request& req, httplib::Response& res) {
             L"Proxy error",
             utf8_to_utf16("Failed to connect to " + route->target_base_url),
             L"upstream",
-            utf8_to_utf16(route->path_prefix));
+            utf8_to_utf16(route->subdomain));
         return;
     }
 
@@ -324,16 +322,12 @@ void proxy_request(const httplib::Request& req, httplib::Response& res) {
         icon = notiman::NotificationIcon::Warning;
     }
 
-    const std::string remainder = req.path.size() > route->path_prefix.size()
-        ? req.path.substr(route->path_prefix.size())
-        : "/";
-
     notify_host(
         icon,
         build_request_title(req, elapsed_ms),
         L"",
-        utf8_to_utf16(remainder),
-        utf8_to_utf16(route->path_prefix));
+        utf8_to_utf16(req.path),
+        utf8_to_utf16(route->subdomain));
 }
 
 bool start_proxy_server() {
@@ -385,18 +379,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_TRAYICON:
         if (lParam == WM_RBUTTONUP) {
-            HMENU menu = CreatePopupMenu();
-            if (menu) {
-                AppendMenuW(menu, MF_STRING, IDM_OPEN_SETTINGS, L"Open Settings");
-                AppendMenuW(menu, MF_STRING, IDM_EXIT, L"Exit");
-
-                POINT pt;
-                GetCursorPos(&pt);
-                SetForegroundWindow(hwnd);
-                TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
-                PostMessage(hwnd, WM_NULL, 0, 0);
-                DestroyMenu(menu);
-            }
+            notiman::show_open_settings_exit_menu(hwnd, IDM_OPEN_SETTINGS, IDM_EXIT);
         }
         return 0;
 
@@ -414,6 +397,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         }
         return 0;
+
+    case WM_CONFIG_CHANGED: {
+        auto new_config = notiman::ProxyConfig::load_from_file(g_config_path);
+        {
+            std::unique_lock lock(g_config_mutex);
+            g_proxy_config.routes = std::move(new_config.routes);
+        }
+        notify_host(notiman::NotificationIcon::Info, L"Proxy config reloaded", L"Routes updated");
+        return 0;
+    }
 
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -466,24 +459,32 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         return 1;
     }
 
-    const auto config_path = ensure_proxy_config_path();
-    g_proxy_config = notiman::ProxyConfig::load_from_file(config_path);
+    g_config_path = ensure_proxy_config_path();
+    g_proxy_config = notiman::ProxyConfig::load_from_file(g_config_path);
 
-    g_nid.cbSize = sizeof(NOTIFYICONDATAW);
-    g_nid.hWnd = g_hwnd;
-    g_nid.uID = 1;
-    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    g_nid.uCallbackMessage = WM_TRAYICON;
-    g_nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-    swprintf_s(g_nid.szTip, L"Notiman Proxy");
-    Shell_NotifyIconW(NIM_ADD, &g_nid);
+    g_watcher_dir_handle = CreateFileW(
+        g_config_path.parent_path().wstring().c_str(),
+        FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (g_watcher_dir_handle != INVALID_HANDLE_VALUE) {
+        g_watcher_thread = std::thread(
+            notiman::run_config_watcher,
+            g_watcher_dir_handle,
+            g_hwnd,
+            WM_CONFIG_CHANGED,
+            g_config_path.filename().wstring());
+    }
+
+    notiman::init_tray_icon(g_nid, g_hwnd, 1, WM_TRAYICON, L"Notiman Proxy");
+    notiman::add_tray_icon(g_nid);
 
     if (!start_proxy_server()) {
         notify_host(
             notiman::NotificationIcon::Error,
             L"notiman-proxy startup error",
             utf8_to_utf16("Failed to bind " + g_proxy_config.host + ":" + std::to_string(g_proxy_config.port)));
-        Shell_NotifyIconW(NIM_DELETE, &g_nid);
+        notiman::remove_tray_icon(g_nid);
         if (mutex) {
             CloseHandle(mutex);
         }
@@ -501,8 +502,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         DispatchMessage(&msg);
     }
 
+    if (g_watcher_dir_handle != INVALID_HANDLE_VALUE) {
+        if (g_watcher_thread.joinable()) {
+            CancelSynchronousIo(reinterpret_cast<HANDLE>(g_watcher_thread.native_handle()));
+        }
+        CloseHandle(g_watcher_dir_handle);
+        g_watcher_dir_handle = INVALID_HANDLE_VALUE;
+    }
+    if (g_watcher_thread.joinable()) {
+        g_watcher_thread.join();
+    }
+
     stop_proxy_server();
-    Shell_NotifyIconW(NIM_DELETE, &g_nid);
+    notiman::remove_tray_icon(g_nid);
 
     if (mutex) {
         CloseHandle(mutex);

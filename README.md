@@ -78,7 +78,7 @@ notiman-proxy.exe
 ```
 
 Right click the system tray icon and modify settings.
-Set up the urls to point to based on path.
+Set up subdomain routes that point to upstream URLs.
 
 ## Configuration File
 
@@ -121,12 +121,12 @@ host=127.0.0.1
 port=9876
 
 [routes]
-/api = http://localhost:8888
-/auth = http://localhost:9999
-/service3 = http://localhost:6666
+api = http://localhost:8888
+auth = http://localhost:9999
+service3 = http://localhost:6666
 ```
 
-Then running `curl http://localhost:9876/api/user/123` will proxy to `http://localhost:8888/user/123`.
+Then a request like `curl http://127.0.0.1:9876/user/123 -H "Host: api.localhost:9876"` will proxy to `http://localhost:8888/user/123`.
 
 ## Agent Support
 
